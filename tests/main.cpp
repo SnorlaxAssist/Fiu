@@ -452,6 +452,38 @@ int vector__index(lua_State* L)
 	return 1;
 }
 
+int getCompileOptions(lua_State* L)
+{
+	lua_newtable(L);
+	lua_pushinteger(L, globalOptions.optimizationLevel);
+	lua_setfield(L, -2, "optimizationLevel");
+	lua_pushinteger(L, globalOptions.debugLevel);
+	lua_setfield(L, -2, "debugLevel");
+	lua_pushinteger(L, globalOptions.coverageLevel);
+	lua_setfield(L, -2, "coverageLevel");
+	lua_pushstring(L, globalOptions.vectorCtor);
+	lua_setfield(L, -2, "vectorCtor");
+	lua_pushstring(L, globalOptions.vectorLib);
+	lua_setfield(L, -2, "vectorLib");
+	lua_pushstring(L, globalOptions.vectorType);
+	lua_setfield(L, -2, "vectorType");
+	return 1;
+}
+
+void setupTestEnvironment(lua_State* L)
+{
+	lua_pushboolean(L, 0);
+	lua_setfield(L, LUA_REGISTRYINDEX, "@TestResult");
+	lua_pushinteger(L, 0);
+	lua_setfield(L, LUA_REGISTRYINDEX, "@TestStepLine");
+	// Ref: https://github.com/luau-lang/luau/blob/d21b6fdb936c4fc6f40caa225fc26d6c531beee5/tests/Conformance.test.cpp#L207C1-L211C7
+	// In some configurations we have a larger C stack consumption which trips some conformance tests
+#if defined(LUAU_ENABLE_ASAN) || defined(_NOOPT) || defined(_DEBUG)
+	lua_pushboolean(L, true);
+	lua_setglobal(L, "limitedstack");
+#endif
+
+}
 
 lua_State* newLuau(const char* chunkName = "Luau")
 {
@@ -468,16 +500,14 @@ lua_State* newLuau(const char* chunkName = "Luau")
 		{"getNamecall", getNamecall},
 		{"VECTOR", createVector},
 		{"MATCH", valueComparator},
+		{"COMPILEOPTIONS", getCompileOptions},
 		{"OK", testOk},
 		{NULL, NULL},
 	};
 
 	loadDebugIO(L);
 
-	lua_pushboolean(L, 0);
-	lua_setfield(L, LUA_REGISTRYINDEX, "@TestResult");
-	lua_pushinteger(L, 0);
-	lua_setfield(L, LUA_REGISTRYINDEX, "@TestStepLine");
+	setupTestEnvironment(L);
 
 	lua_pushvalue(L, LUA_GLOBALSINDEX);
 	luaL_register(L, NULL, funcs);
@@ -522,6 +552,10 @@ lua_State* newLuau(const char* chunkName = "Luau")
 
 	luaL_sandbox(L);
 	luaL_sandboxthread(L); // Proxy Global Environment
+	
+	lua_pushvalue(L, LUA_GLOBALSINDEX);
+	lua_pushvalue(L, LUA_GLOBALSINDEX);
+	lua_setfield(L, -1, "_G");
 
 	return L;
 }
@@ -538,6 +572,7 @@ lua_State* newFiu(const char* chunkName = "Fiu")
 	static const luaL_Reg funcs[] = {
 		{"loadstring", lua_loadstring},
 		{"collectgarbage", lua_collectgarbage},
+		{"COMPILEOPTIONS", getCompileOptions},
 		{"MATCH", valueComparator},
 		{"OK", testOk},
 		{NULL, NULL},
@@ -545,10 +580,7 @@ lua_State* newFiu(const char* chunkName = "Fiu")
 
 	loadDebugIO(L);
 
-	lua_pushboolean(L, 0);
-	lua_setfield(L, LUA_REGISTRYINDEX, "@TestResult");
-	lua_pushinteger(L, 0);
-	lua_setfield(L, LUA_REGISTRYINDEX, "@TestStepLine");
+	setupTestEnvironment(L);
 
 	lua_pushvalue(L, LUA_GLOBALSINDEX);
 	luaL_register(L, NULL, funcs);
@@ -556,13 +588,6 @@ lua_State* newFiu(const char* chunkName = "Fiu")
 
 	lua_pushstring(L, "Fiu");
 	lua_setglobal(L, "TEST_CTX");
-
-	// Ref: https://github.com/luau-lang/luau/blob/d21b6fdb936c4fc6f40caa225fc26d6c531beee5/tests/Conformance.test.cpp#L207C1-L211C7
-	// In some configurations we have a larger C stack consumption which trips some conformance tests
-#if defined(LUAU_ENABLE_ASAN) || defined(_NOOPT) || defined(_DEBUG)
-	lua_pushboolean(L, true);
-	lua_setglobal(L, "limitedstack");
-#endif
 
 	luaL_sandbox(L);
 	luaL_sandboxthread(L); // Proxy Global Environment
@@ -577,7 +602,7 @@ lua_State* newFiu(const char* chunkName = "Fiu")
 	return L;
 }
 
-TestResult RUN_TEST(string testName, string fileName)
+TestResult RUN_TEST(string testName, string fileName, bool useLuauForce = false)
 {
 	TestResult result;
 
@@ -597,16 +622,20 @@ TestResult RUN_TEST(string testName, string fileName)
 		bool useLuau = false;
 		for (const Luau::HotComment& comment : hotcomments)
 			if (comment.content == "ctx Luau")
-			{
 				useLuau = true;
-			}
+
+		if (useLuauForce)
+			useLuau = true;
 
 		lua_State* L = useLuau ? newLuau() : newFiu();
 
 		string bytecode = compileError.data;
+		double fiuExecutionTime = 0;
+		double fiuDeserializationTime = 0;
+
 		try
 		{
-			future<int> testTask = async([L, bytecode, useLuau, testName]()
+			future<int> testTask = async([L, bytecode, useLuau, testName, &fiuExecutionTime, &fiuDeserializationTime]()
 			{
 				if (useLuau)
 				{
@@ -621,9 +650,11 @@ TestResult RUN_TEST(string testName, string fileName)
 					lua_getfield(L, -1, "luau_deserialize");
 					lua_pushlstring(L, bytecode.c_str(), bytecode.size());
 
+					double deserializeStartTime = lua_clock();
 					int deserialize = lua_pcall(L, 1, 1, 0);
 					if (deserialize != 0)
 						return deserialize;
+					fiuDeserializationTime = lua_clock() - deserializeStartTime;
 
 					lua_getfield(L, -2, "luau_newsettings");
 					int newsettings = lua_pcall(L, 0, 1, 0);
@@ -655,7 +686,7 @@ TestResult RUN_TEST(string testName, string fileName)
 					}, "stepHook");
 					lua_setfield(L, -2, "stepHook");
 					lua_pop(L, 1);
-					
+
 					lua_getfield(L, -3, "luau_load");
 					lua_pushvalue(L, -3);
 					lua_pushvalue(L, LUA_GLOBALSINDEX);
@@ -665,7 +696,11 @@ TestResult RUN_TEST(string testName, string fileName)
 					if (load != 0)
 						return load;
 
-					return lua_resume(L, L, 0);
+					double fiuExecutionStartTime = lua_clock();
+					int status = lua_resume(L, L, 0);
+					fiuExecutionTime = lua_clock() - fiuExecutionStartTime;
+
+					return status;
 				}
 			});
 
@@ -698,18 +733,32 @@ TestResult RUN_TEST(string testName, string fileName)
 						if (lua_isstring(L, -1))
 							result.output = uformat("[%s] Test [%s]: Passed ", SUCCESS_SYMBOL, testName.c_str()) + "{ " + string(lua_tostring(L, -1)) + " }";
 						else
+						{
 							result.output = uformat("[%s] Test [%s]: Passed", SUCCESS_SYMBOL, testName.c_str());
+							if (!useLuau)
+							{
+								result.output += uformat("%s [ ", STYLE_DIM);
+								result.output += applyColor(COLOR_GREEN, "Deserialization") + string(STYLE_DIM) + ": ";
+								if (fiuDeserializationTime > 0.8)
+									result.output += applyColor(COLOR_YELLOW, to_string(fiuDeserializationTime) + "s") + string(STYLE_DIM);
+								else
+									result.output += to_string(fiuDeserializationTime) + "s";
+								result.output += ", " + applyColor(COLOR_RED, "Execution") + string(STYLE_DIM) + ": ";
+								if (fiuExecutionTime > 0.8)
+									result.output += applyColor(COLOR_YELLOW, to_string(fiuExecutionTime) + "s") + string(STYLE_DIM);
+								else
+									result.output += to_string(fiuExecutionTime) + "s";
+								result.output += uformat(" ]%s", STYLE_RESET);
+							}
+						}
 					}
 					else
-					{
 						result.output = uformat("[%s] Test [%s]: No valid confirmation (not OK)", ERROR_SYMBOL, testName.c_str());
-					}
 				}
 				else
 				{
-					if (useLuau) {
+					if (useLuau)
 						result.output = uformat("[%s] Test [%s]: Error: ", ERROR_SYMBOL, testName.c_str()) + string(lua_tostring(L, -1));
-					}
 					else
 					{
 						lua_getfield(L, LUA_REGISTRYINDEX, "@TestStepLine");
@@ -725,9 +774,7 @@ TestResult RUN_TEST(string testName, string fileName)
 		lua_close(L);
 	}
 	else
-	{
 		result.output = uformat("[%s] Test [%s]: Failed to compile test: %s", ERROR_SYMBOL, testName.c_str(), compileError.data.c_str());
-	}
 
 	return result;
 }
@@ -738,13 +785,12 @@ int main(int argc, char* argv[])
 	filesystem::path buildOutputDirectory;
 
 	const char* mode = "test";
+	bool useLuauForce = false;
 
 	int start = 1;
 
 	if (argc > 1 && strcmp(argv[1], "test") == 0)
-	{
 		start = 2;
-	}
 	else if (argc > 1 && (strcmp(argv[1], "mdt") == 0 || strcmp(argv[1], "make-deserializer-tests") == 0))
 	{
 		mode = "mdt";
@@ -770,12 +816,8 @@ int main(int argc, char* argv[])
 			vector<string> testCases;
 			filesystem::path root = filesystem::path(argv[i]);
 			for (const filesystem::directory_entry& entry : filesystem::directory_iterator(cwd / "tests" / root))
-			{
 				if (entry.is_regular_file())
-				{
 					testCases.push_back((root / entry.path().stem()).string());
-				}
-			}
 
 			TestCases = {
 				{"CLI", testCases},
@@ -845,6 +887,18 @@ int main(int argc, char* argv[])
 			i++;
 			const char* vectorType = argv[i];
 			globalOptions.vectorType = vectorType;
+		}
+		else if (strcmp(argv[i], "-ctx") == 0)
+		{
+			i++;
+			const char* ctx = argv[i];
+			if (strcmp(ctx, "Luau") == 0)
+				useLuauForce = true;
+			else
+			{
+				printf("Error: Unknown context: %s\n", ctx);
+				return 1;
+			}
 		}
 		else
 		{
@@ -1082,12 +1136,10 @@ int main(int argc, char* argv[])
 		bool failed = false;
 		for (const string& file : section.second)
 		{
-			TestResult result = RUN_TEST(file, "./tests/" + file);
+			TestResult result = RUN_TEST(file, "./tests/" + file, useLuauForce);
 			tests.results.push_back(result);
 			if (!result.success)
-			{
 				failed = true;
-			}
 		}
 
 		for (const TestResult& result : tests.results)

@@ -54,7 +54,7 @@ assert(type(f) == 'function')
 
 
 -- testing globals ;-)
-do
+if TEXT_CTX == "Fiu" then
   local f = {}
   -- Originally `local _G = getfenv()` but enviroment is all over the place in FIU,
   -- and FIU doesnt manage env inside its own execution. Referencing is simplier

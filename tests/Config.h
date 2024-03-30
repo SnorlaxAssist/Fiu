@@ -145,5 +145,6 @@ FIU_TESTCASES {
 		"Benchmarks/Speeds/closure",
 		"Benchmarks/Speeds/table",
 		"Benchmarks/maxcstack",
+		"Benchmarks/info",
 	}}
 };

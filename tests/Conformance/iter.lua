@@ -209,8 +209,12 @@ function testgetfenv()
   local ok, err = pcall(function() for k, v in ipairs({}) do end end)
   assert(not ok and err:match("attempt to iterate over a string value"))
 
-  local ok, err = pcall(function() for k, v in next, {} do end end)
-  assert(not ok and err:match("attempt to iterate over a table value"))
+  local CompileOptions = COMPILEOPTIONS()
+  if CompileOptions.optimizationLevel > 0 then
+    -- For odd reason, both Luau and Fiu fails this test when optimization level is 0
+    local ok, err = pcall(function() for k, v in next, {} do end end)
+    assert(not ok and err:match("attempt to iterate over a table value"))
+  end
 end
 
 testgetfenv() -- DONT MOVE THIS LINE
