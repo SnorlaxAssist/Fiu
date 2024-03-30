@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  unit-tests:
-    name: Unit Tests
+  build-test:
+    name: Build TestSuite
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -24,11 +24,42 @@ jobs:
           key: ${{ runner.os }}-build-test-suite-${{ hashFiles('./tests/**/*.cpp') }}-${{ hashFiles('./tests/**/*.h') }}
 
       - if: ${{ steps.cache-test-suite.outputs.cache-hit != 'true' }}
-        name: Make tests
+        name: Build and Cache TestSuite
         run: |
           cmake -DCMAKE_BUILD_TYPE=Release -B ./build ./tests
           cmake --build ./build --target=fiu-tests --config Release
+
+  unit-tests:
+    needs: build-test
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        optimizationLevel: [0,1,2]
+        debugLevel: [0,1,2]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Cache TestSuite
+        id: cache-test-suite
+        uses: actions/cache@v3
+        with:
+          path: ./build/fiu-tests
+          key: ${{ runner.os }}-build-test-suite-${{ hashFiles('./tests/**/*.cpp') }}-${{ hashFiles('./tests/**/*.h') }}
       
-      - name: Run tests
+      - if: ${{ steps.cache-test-suite.outputs.cache-hit != 'true' }}
         run: |
-          ./build/fiu-tests -O2 -D2
+          echo "TestSuite build cache not found. Exiting..."
+          exit 1
+
+      - name: Run Tests (O${{ matrix.optimizationLevel }}, D${{ matrix.debugLevel }})
+        run: |
+          ./build/fiu-tests -O${{ matrix.optimizationLevel }} -D${{ matrix.debugLevel }} -C0
+      - name: Run Tests (O${{ matrix.optimizationLevel }}, D${{ matrix.debugLevel }}) Coverage 1
+        run: |
+          ./build/fiu-tests -O${{ matrix.optimizationLevel }} -D${{ matrix.debugLevel }} -C1
+      - name: Run Tests (O${{ matrix.optimizationLevel }}, D${{ matrix.debugLevel }}) Coverage 2
+        run: |
+          ./build/fiu-tests -O${{ matrix.optimizationLevel }} -D${{ matrix.debugLevel }} -C2
