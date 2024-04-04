@@ -174,7 +174,7 @@ local function luau_validatesettings(luau_settings)
 	assert(type(luau_settings.allowProxyErrors) == "boolean", "luau_settings.allowProxyErrors should be a boolean")
 end
 
-local function luau_deserialize(bytecode, luau_settings)
+local function luau_deserialize(bytecode, luau_settings, env)
 	if luau_settings == nil then
 		luau_settings = luau_newsettings()
 	else 
@@ -320,13 +320,33 @@ local function luau_deserialize(bytecode, luau_settings)
 				local id1 = bit32_band(bit32_rshift(extend, 10), 0x3FF)
 
 				inst.K1 = k[id1 + 1]
+				if env then
+					local o = env[K0]
+					if o then
+						inst.ImportK = o[K1]
+					end
+				end
 			elseif count == 3 then
 				local id1 = bit32_band(bit32_rshift(extend, 10), 0x3FF)
 				local id2 = bit32_band(bit32_rshift(extend, 0), 0x3FF)
 
 				inst.K1 = k[id1 + 1]
 				inst.K2 = k[id2 + 1]
+				if env then
+					local o = env[K0]
+					if o then
+						o = env[K1]
+						if o then
+							inst.ImportK = o[K2]
+						end
+					end
+				end
+			else
+				if env then
+					inst.ImportK = env[K0]
+				end
 			end
+			
 		elseif kmode == 5 then --// AUX boolean low 1 bit
 			inst.K = bit32_extract(inst.aux, 0, 1) == 1
 			inst.KN = bit32_extract(inst.aux, 31, 1) == 1
@@ -529,7 +549,7 @@ local function luau_load(module, env, luau_settings)
 	end
 
 	if type(module) == "string" then
-		module = luau_deserialize(module, luau_settings)
+		module = luau_deserialize(module, luau_settings, env)
 	end
 
 	local protolist = module.protoList
@@ -642,6 +662,11 @@ local function luau_load(module, env, luau_settings)
 						end
 					end
 				elseif op == 12 then --[[ GETIMPORT ]]
+					if inst.ImportK then
+						stack[inst.A] = inst.ImportK
+						pc += 1 --// adjust for aux 
+						continue
+					end
 					local count = inst.KC
 					local k0 = inst.K0
 					local import = extensions[k0] or env[k0]
