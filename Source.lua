@@ -455,7 +455,7 @@ local function luau_deserialize(bytecode, luau_settings)
 
 			for i = 1, sizecode do 
 				--// p->abslineinfo[pc >> p->linegaplog2] + p->lineinfo[pc];
-				table_insert(instructionlineinfo, abslineinfo[bit32_rshift(i, linegaplog2) + 1] + lineinfo[i])
+				table_insert(instructionlineinfo, (abslineinfo[bit32_rshift(i, linegaplog2) + 1] or 0) + (lineinfo[i] or 0))
 			end
 		end
 
@@ -521,6 +521,30 @@ local function luau_deserialize(bytecode, luau_settings)
 	}
 end
 
+local enums = {}
+
+enums.RequestType = {
+	Get = 0,
+	Set = 1,
+}
+enums.ContextType = {
+	Global = 0,
+	Table = 1,
+}
+enums.Continuation = {
+	Continue = table.freeze(table_create(0)),
+}
+
+local ENUMS_REQUESTTYPE_GET = enums.RequestType.Get
+local ENUMS_REQUESTTYPE_SET = enums.RequestType.Set
+local ENUMS_CONTEXTTYPE_GLOBAL = enums.ContextType.Global
+local ENUMS_CONTEXTTYPE_TABLE = enums.ContextType.Table
+local ENUMS_CONTINUATION_CONTINUE = enums.Continuation.Continue
+
+local function IS_PROPERTY_OP(op)
+	return op == 7 or op == 8 or (op >= 13 and op <= 18)
+end
+		
 local function luau_load(module, env, luau_settings)
 	if luau_settings == nil then
 		luau_settings = luau_newsettings()
@@ -535,10 +559,11 @@ local function luau_load(module, env, luau_settings)
 	local protolist = module.protoList
 	local mainProto = module.mainProto
 
-	local breakHook = luau_settings.callHooks.breakHook
+	local breakHook = luau_settings.breakHook
 	local stepHook = luau_settings.callHooks.stepHook
 	local interruptHook = luau_settings.callHooks.interruptHook
 	local panicHook = luau_settings.callHooks.panicHook
+	local propertyHook = luau_settings.callHooks.propertyHook
 
 	local alive = true 
 
@@ -594,6 +619,47 @@ local function luau_load(module, env, luau_settings)
 
 				if stepHook then
 					stepHook(stack, debugging, proto, module, upvals)
+				end
+
+				if propertyHook and IS_PROPERTY_OP(op) then
+					local mode, context, target, index, value, newValue
+					if op == 7 then --[[ GETGLOBAL ]]
+						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_GLOBAL, env
+						index = inst.K
+					elseif op == 13 then --[[ GETTABLE ]]
+						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
+						index = stack[inst.C]
+					elseif op == 15 then --[[ GETTABLEKS ]]
+						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
+						index = inst.K
+					elseif op == 17 then --[[ GETTABLEN ]]
+						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
+						index = inst.C + 1
+					elseif op == 8 then --[[ SETGLOBAL ]]
+						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_GLOBAL, env
+						index, value = inst.K, stack[inst.A]
+					elseif op == 14 then --[[ SETTABLE ]]
+						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
+						index, value = stack[inst.C], stack[inst.A]
+					elseif op == 16 then --[[ SETTABLEKS ]]
+						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
+						index, value = inst.K, stack[inst.A]
+					elseif op == 18 then --[[ SETTABLEN ]]
+						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
+						index, value = inst.C + 1, stack[inst.A]
+					else
+						error(`Unknown PropertyHook OpCode: {op}`)
+					end
+					newValue = propertyHook(mode, context, target, index, value)
+					if newValue ~= ENUMS_CONTINUATION_CONTINUE then
+						if mode == ENUMS_REQUESTTYPE_SET then
+							target[index] = newValue
+						elseif mode == ENUMS_REQUESTTYPE_GET then
+							stack[inst.A] = newValue
+						else
+							error("fiu-internal: Unknown PropertyHook mode");
+						end
+					end
 				end
 
 				if op == 0 then --[[ NOP ]]
@@ -1272,4 +1338,5 @@ return {
 	luau_validatesettings = luau_validatesettings,
 	luau_deserialize = luau_deserialize,
 	luau_load = luau_load,
+	enums = enums,
 }
