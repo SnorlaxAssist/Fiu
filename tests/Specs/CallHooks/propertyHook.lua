@@ -48,8 +48,8 @@ local propertyCalled = false
 local cOverride = false
 local variableOnce = false
 settings.callHooks.propertyHook = function(mode, context, target, index, value)
-  	propertyCalled = true;
-    if mode == FiuEnum.RequestType.Get then
+	propertyCalled = true;
+	if mode == FiuEnum.RequestType.Get then
 		if context == FiuEnum.ContextType.Global then
 			if index == "Bar" then
 				variableOnce = not variableOnce
