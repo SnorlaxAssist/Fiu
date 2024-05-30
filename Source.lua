@@ -623,27 +623,32 @@ local function luau_load(module, env, luau_settings)
 
 				if propertyHook and IS_PROPERTY_OP(op) then
 					local mode, context, target, index, value, newValue
+					local adjustAux = false
 					if op == 7 then --[[ GETGLOBAL ]]
 						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_GLOBAL, env
 						index = inst.K
+						adjustAux = true
 					elseif op == 13 then --[[ GETTABLE ]]
 						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
 						index = stack[inst.C]
 					elseif op == 15 then --[[ GETTABLEKS ]]
 						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
 						index = inst.K
+						adjustAux = true
 					elseif op == 17 then --[[ GETTABLEN ]]
 						mode, context, target = ENUMS_REQUESTTYPE_GET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
 						index = inst.C + 1
 					elseif op == 8 then --[[ SETGLOBAL ]]
 						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_GLOBAL, env
 						index, value = inst.K, stack[inst.A]
+						adjustAux = true
 					elseif op == 14 then --[[ SETTABLE ]]
 						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
 						index, value = stack[inst.C], stack[inst.A]
 					elseif op == 16 then --[[ SETTABLEKS ]]
 						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
 						index, value = inst.K, stack[inst.A]
+						adjustAux = true
 					elseif op == 18 then --[[ SETTABLEN ]]
 						mode, context, target = ENUMS_REQUESTTYPE_SET, ENUMS_CONTEXTTYPE_TABLE, stack[inst.B]
 						index, value = inst.C + 1, stack[inst.A]
@@ -652,6 +657,9 @@ local function luau_load(module, env, luau_settings)
 					end
 					newValue = propertyHook(mode, context, target, index, value)
 					if newValue ~= ENUMS_CONTINUATION_CONTINUE then
+						if adjustAux then
+							pc += 1 --// adjust for aux
+						end
 						if mode == ENUMS_REQUESTTYPE_SET then
 							target[index] = newValue
 						elseif mode == ENUMS_REQUESTTYPE_GET then
@@ -659,6 +667,7 @@ local function luau_load(module, env, luau_settings)
 						else
 							error("fiu-internal: Unknown PropertyHook mode");
 						end
+						continue
 					end
 				end
 
