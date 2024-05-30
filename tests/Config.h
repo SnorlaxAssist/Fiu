@@ -139,6 +139,7 @@ FIU_TESTCASES {
 		"Specs/CallHooks/interruptHook",
 		"Specs/CallHooks/panicHook",
 		"Specs/CallHooks/stepHook",
+		"Specs/CallHooks/propertyHook",
 		"Specs/extensions",
 		"Specs/nativeNamecall",
 		"Specs/vectorLib",
