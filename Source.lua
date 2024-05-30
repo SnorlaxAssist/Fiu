@@ -559,7 +559,7 @@ local function luau_load(module, env, luau_settings)
 	local protolist = module.protoList
 	local mainProto = module.mainProto
 
-	local breakHook = luau_settings.breakHook
+	local breakHook = luau_settings.callHooks.breakHook
 	local stepHook = luau_settings.callHooks.stepHook
 	local interruptHook = luau_settings.callHooks.interruptHook
 	local panicHook = luau_settings.callHooks.panicHook
